@@ -1,0 +1,226 @@
+// Restaurant Business Software - Database Schema
+//
+// Default datasource is SQLite so the whole stack runs with zero external
+// dependencies. For production, switch the provider to "postgresql" and
+// point DATABASE_URL at a real Postgres instance.
+//
+// NOTE: SQLite has no native enum type, so "enum-like" fields below are
+// plain Strings whose allowed values are enforced by the Zod schemas in
+// src/routes/*.ts. The allowed values for each are documented next to the
+// field. If you migrate to Postgres you may optionally convert these back
+// to real `enum` types.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Role: ADMIN | MANAGER | CHEF | WAITER | CASHIER
+// TableStatus: AVAILABLE | OCCUPIED | RESERVED | CLEANING
+// ReservationStatus: PENDING | CONFIRMED | SEATED | CANCELLED | COMPLETED | NO_SHOW
+// OrderType: DINE_IN | TAKEAWAY | DELIVERY
+// OrderStatus: OPEN | PREPARING | READY | SERVED | COMPLETED | CANCELLED
+// OrderItemStatus: PENDING | PREPARING | READY | SERVED | CANCELLED
+// PaymentMethod: CASH | CARD | ONLINE | WALLET
+// InventoryTxnType: PURCHASE | USAGE | ADJUSTMENT | WASTE
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("WAITER")
+  phone        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ordersTaken  Order[]  @relation("OrderWaiter")
+  shifts       Shift[]
+
+  @@map("users")
+}
+
+model Shift {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clockIn  DateTime  @default(now())
+  clockOut DateTime?
+  notes    String?
+
+  @@map("shifts")
+}
+
+model Category {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  sortOrder Int        @default(0)
+  menuItems MenuItem[]
+
+  @@map("categories")
+}
+
+model MenuItem {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  cost        Float    @default(0)
+  imageUrl    String?
+  isAvailable Boolean  @default(true)
+  isVeg       Boolean  @default(false)
+  spiceLevel  Int      @default(0)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderItems  OrderItem[]
+  recipeItems RecipeItem[]
+
+  @@map("menu_items")
+}
+
+model RestaurantTable {
+  id       String @id @default(cuid())
+  number   Int    @unique
+  capacity Int    @default(2)
+  status   String @default("AVAILABLE")
+  location String?
+
+  orders       Order[]
+  reservations Reservation[]
+
+  @@map("restaurant_tables")
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  name          String
+  phone         String?  @unique
+  email         String?
+  loyaltyPoints Int      @default(0)
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  orders       Order[]
+  reservations Reservation[]
+
+  @@map("customers")
+}
+
+model Reservation {
+  id            String           @id @default(cuid())
+  customerId    String?
+  customer      Customer?        @relation(fields: [customerId], references: [id])
+  customerName  String
+  customerPhone String?
+  partySize     Int
+  date          DateTime
+  tableId       String?
+  table         RestaurantTable? @relation(fields: [tableId], references: [id])
+  status        String           @default("PENDING")
+  notes         String?
+  createdAt     DateTime         @default(now())
+
+  @@map("reservations")
+}
+
+model Order {
+  id         String           @id @default(cuid())
+  type       String           @default("DINE_IN")
+  status     String           @default("OPEN")
+  tableId    String?
+  table      RestaurantTable? @relation(fields: [tableId], references: [id])
+  customerId String?
+  customer   Customer?        @relation(fields: [customerId], references: [id])
+  waiterId   String?
+  waiter     User?            @relation("OrderWaiter", fields: [waiterId], references: [id])
+
+  subtotal Float @default(0)
+  taxRate  Float @default(0.08)
+  tax      Float @default(0)
+  discount Float @default(0)
+  total    Float @default(0)
+
+  items    OrderItem[]
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId String
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+  quantity   Int      @default(1)
+  price      Float
+  notes      String?
+  status     String   @default("PENDING")
+
+  @@map("order_items")
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method    String
+  amount    Float
+  tip       Float    @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("payments")
+}
+
+model InventoryItem {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  unit         String   @default("unit")
+  quantity     Float    @default(0)
+  reorderLevel Float    @default(0)
+  costPerUnit  Float    @default(0)
+  supplier     String?
+  updatedAt    DateTime @updatedAt
+
+  transactions InventoryTransaction[]
+  recipeItems  RecipeItem[]
+
+  @@map("inventory_items")
+}
+
+model InventoryTransaction {
+  id              String        @id @default(cuid())
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  type            String
+  quantity        Float
+  note            String?
+  createdAt       DateTime      @default(now())
+
+  @@map("inventory_transactions")
+}
+
+// Links a menu item to the inventory items it consumes, enabling automatic
+// stock deduction whenever an order is placed.
+model RecipeItem {
+  id              String        @id @default(cuid())
+  menuItemId      String
+  menuItem        MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  quantityUsed    Float
+
+  @@unique([menuItemId, inventoryItemId])
+  @@map("recipe_items")
+}
